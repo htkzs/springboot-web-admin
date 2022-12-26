@@ -1,0 +1,40 @@
+声明一个公共片段和引用这个公共的片段
+通过 th:fragment="headermenu" 声明一个片段 引用 th:insert="~{footer::copy}" footer就指的是另一个页面 footer.html 也可以直接th:insert="footer::copy"
+也可以th:replace
+<div id="commonscript"> 声明一个选择器  然后通过id选择器引用 th:insert="~{footer::#commonscript}"
+
+insert和replace的区别：
+<body>
+  ...
+
+  <div th:insert="~{footer :: copy}"></div>
+
+  <div th:replace="~{footer :: copy}"></div>
+
+  <div th:include="~{footer :: copy}"></div>
+</body>
+
+
+<body>
+
+  ...
+  相当于保留原来的div标签
+  <div>
+    <footer>
+      &copy; 2011 The Good Thymes Virtual Grocery
+    </footer>
+  </div>
+  相当于将原来的div标签直接替换 不带原来的标签，只替换标签内的其它标签
+  <footer>
+    &copy; 2011 The Good Thymes Virtual Grocery
+  </footer>
+  相当于直接将内容copy过来
+  <div>
+      &copy; 2011 The Good Thymes Virtual Grocery
+  </div>
+
+</body>
+
+
+登录功能和登出功能
+登录成功保存到session中，登出之后清除session

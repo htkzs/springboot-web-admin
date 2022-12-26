@@ -69,30 +69,35 @@ public class IndexController {
     }
 
     /**
-     * 来登录页
+     * 来登录页 来到首页 通过URL: http://localhost:8080/ 或者  http://localhost:8080/login
      * @return
      */
     @GetMapping(value = {"/","/login"})
     public String loginPage(){
-
         return "login";
     }
 
-
+    /*
+     * @Author GhostGalaxy
+     * @Description 处理表单的登录功能   th:action="@{/login}  注意在SpringMVC封装表单数据到一个javaBean中时 表单的name值要和实体类的字段名称一样，否则封装失败
+     *
+     * @Date 10:26:36 2022/12/24
+     * @Param [user, session, model]
+     * @return String
+     **/
     @PostMapping("/login")
     public String main(User user, HttpSession session, Model model){ //RedirectAttributes
 
         if(StringUtils.hasLength(user.getUserName()) && "123456".equals(user.getPassword())){
             //把登陆成功的用户保存起来
             session.setAttribute("loginUser",user);
-            //登录成功重定向到main.html;  重定向防止表单重复提交
+            //登录成功重定向到main.html;  重定向防止表单重复提交  因为请求转发的地址栏不会改变，当用户再次刷新时就是一次新的提交 而重定向地址栏会改变再次刷新，只是刷新当前页面
             return "redirect:/main.html";
         }else {
             model.addAttribute("msg","账号密码错误");
             //回到登录页面
             return "login";
         }
-
     }
 
     /**
