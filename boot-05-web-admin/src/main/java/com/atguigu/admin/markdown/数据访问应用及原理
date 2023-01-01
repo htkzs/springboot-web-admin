@@ -1,0 +1,270 @@
+1.导入JDBC场景分析
+   <dependency>
+       <groupId>org.springframework.boot</groupId>
+       <artifactId>spring-boot-starter-data-jdbc</artifactId>
+   </dependency>
+   实质上spring-boot-starter-data-jdbc还包含了如下依赖
+   <dependency>
+         <groupId>org.springframework.boot</groupId>
+         <artifactId>spring-boot-starter</artifactId>
+         <version>2.3.4.RELEASE</version>
+         <scope>compile</scope>
+       </dependency>
+       <dependency>
+         <groupId>com.zaxxer</groupId>
+         <artifactId>HikariCP</artifactId>  Hikari数据源
+         <version>3.4.5</version>
+         <scope>compile</scope>
+       </dependency>
+       <dependency>
+         <groupId>org.springframework</groupId>
+         <artifactId>spring-jdbc</artifactId>
+         <version>5.2.9.RELEASE</version>
+         <scope>compile</scope>
+       </dependency>
+
+springboot自动版本仲裁  仲裁的版本号是8.0.21
+   <dependency>
+       <groupId>mysql</groupId>
+       <artifactId>mysql-connector-java</artifactId>
+   </dependency>
+
+这个版本太高，我们需要将数据库的驱动版本和数据库版本保持一致
+修改方法一：
+      <dependency>
+          <groupId>mysql</groupId>
+          <artifactId>mysql-connector-java</artifactId>
+          <version>5.1.49</version>
+      </dependency>
+方式二：
+     <properties>
+          <mysql.version>5.1.49<mysql.version>
+     </properties>
+
+2.自动配置相关原理解析:
+2.1 自动配置类
+    ● DataSourceAutoConfiguration:数据源的自动配置
+
+
+     abstract class DataSourceConfiguration {
+         DataSourceConfiguration() {
+         }
+
+         protected static <T> T createDataSource(DataSourceProperties properties, Class<? extends DataSource> type) {
+             return properties.initializeDataSourceBuilder().type(type).build();
+         }
+
+         @Configuration(
+             proxyBeanMethods = false
+         )
+         @ConditionalOnMissingBean({DataSource.class})
+         @ConditionalOnProperty(
+             name = {"spring.datasource.type"}
+         )
+         static class Generic {
+             Generic() {
+             }
+
+             @Bean
+             DataSource dataSource(DataSourceProperties properties) {
+                 return properties.initializeDataSourceBuilder().build();
+             }
+         }
+
+         @Configuration(
+             proxyBeanMethods = false
+         )
+         @ConditionalOnClass({BasicDataSource.class})
+         @ConditionalOnMissingBean({DataSource.class})
+         @ConditionalOnProperty(
+             name = {"spring.datasource.type"},
+             havingValue = "org.apache.commons.dbcp2.BasicDataSource",
+             matchIfMissing = true
+         )
+         static class Dbcp2 {
+             Dbcp2() {
+             }
+
+             @Bean
+             @ConfigurationProperties(
+                 prefix = "spring.datasource.dbcp2"
+             )
+             BasicDataSource dataSource(DataSourceProperties properties) {
+                 return (BasicDataSource)DataSourceConfiguration.createDataSource(properties, BasicDataSource.class);
+             }
+         }
+
+         @Configuration(
+             proxyBeanMethods = false
+         )
+         @ConditionalOnClass({HikariDataSource.class})
+         @ConditionalOnMissingBean({DataSource.class})
+         @ConditionalOnProperty(
+             name = {"spring.datasource.type"},  //当存在多个数据源时（可能需要配置多数据源）可以使用spring.datasource.type指定具体使用那个数据源
+             havingValue = "com.zaxxer.hikari.HikariDataSource",
+             matchIfMissing = true
+         )
+         // spring-boot-starter-data-jdbc自动帮助引入了一个数据源叫 Hikari
+         static class Hikari {
+             Hikari() {
+             }
+
+             @Bean
+             @ConfigurationProperties(
+                 prefix = "spring.datasource.hikari"
+             )
+             HikariDataSource dataSource(DataSourceProperties properties) {
+                 HikariDataSource dataSource = (HikariDataSource)DataSourceConfiguration.createDataSource(properties, HikariDataSource.class);
+                 if (StringUtils.hasText(properties.getName())) {
+                     dataSource.setPoolName(properties.getName());
+                 }
+
+                 return dataSource;
+             }
+         }
+
+
+         @Configuration(
+             proxyBeanMethods = false
+         )
+         @ConditionalOnClass({org.apache.tomcat.jdbc.pool.DataSource.class})
+         @ConditionalOnMissingBean({DataSource.class})  //如果没有数据源配置，就向容器中增加一个数据源配置
+         @ConditionalOnProperty(
+             name = {"spring.datasource.type"},
+             havingValue = "org.apache.tomcat.jdbc.pool.DataSource",
+             matchIfMissing = true
+         )
+         static class Tomcat {
+             Tomcat() {
+             }
+
+             @Bean
+             @ConfigurationProperties(
+                 prefix = "spring.datasource.tomcat"
+             )
+             org.apache.tomcat.jdbc.pool.DataSource dataSource(DataSourceProperties properties) {
+                 org.apache.tomcat.jdbc.pool.DataSource dataSource = (org.apache.tomcat.jdbc.pool.DataSource)DataSourceConfiguration.createDataSource(properties, org.apache.tomcat.jdbc.pool.DataSource.class);
+                 DatabaseDriver databaseDriver = DatabaseDriver.fromJdbcUrl(properties.determineUrl());
+                 String validationQuery = databaseDriver.getValidationQuery();
+                 if (validationQuery != null) {
+                     dataSource.setTestOnBorrow(true);
+                     dataSource.setValidationQuery(validationQuery);
+                 }
+
+                 return dataSource;
+             }
+         }
+     }
+
+     @ConfigurationProperties(
+         prefix = "spring.datasource"
+     )
+     public class DataSourceProperties implements BeanClassLoaderAware, InitializingBean {}
+
+
+
+
+    ● DataSourceTransactionManagerAutoConfiguration:事务管理器的自动配置
+
+    ● JdbcTemplateAutoConfiguration： JdbcTemplate的自动配置，可以来对数据库进行crud
+      ○ 可以修改这个配置项@ConfigurationProperties(prefix = "spring.jdbc") 来修改JdbcTemplate
+      ○ @Bean@Primary    JdbcTemplate；容器中有这个组件
+
+
+         @Configuration(proxyBeanMethods = false)
+         @ConditionalOnClass({DataSource.class, JdbcTemplate.class})
+         @ConditionalOnSingleCandidate(DataSource.class)
+         @AutoConfigureAfter({DataSourceAutoConfiguration.class})
+         @EnableConfigurationProperties({JdbcProperties.class})
+         @Import({JdbcTemplateConfiguration.class, NamedParameterJdbcTemplateConfiguration.class})
+         public class JdbcTemplateAutoConfiguration {
+             public JdbcTemplateAutoConfiguration() {
+             }
+         }
+
+         //配置文件和JavaBean的属性绑定
+         @ConfigurationProperties(prefix = "spring.jdbc")
+         public class JdbcProperties {}
+
+         在JdbcTemplateAutoConfiguration中导入了另一个配置文件JdbcTemplateConfiguration.class 已经帮助自动配置好JdbcTemplate
+         故直接使用即可。
+
+         @Configuration(
+             proxyBeanMethods = false
+         )
+         @ConditionalOnMissingBean({JdbcOperations.class})
+         class JdbcTemplateConfiguration {
+             JdbcTemplateConfiguration() {
+             }
+
+             @Bean
+             @Primary
+             JdbcTemplate jdbcTemplate(DataSource dataSource, JdbcProperties properties) {
+                 JdbcTemplate jdbcTemplate = new JdbcTemplate(dataSource);
+                 Template template = properties.getTemplate();
+                 jdbcTemplate.setFetchSize(template.getFetchSize());
+                 jdbcTemplate.setMaxRows(template.getMaxRows());
+                 if (template.getQueryTimeout() != null) {
+                     jdbcTemplate.setQueryTimeout((int)template.getQueryTimeout().getSeconds());
+                 }
+
+                 return jdbcTemplate;
+             }
+         }
+
+    ● JndiDataSourceAutoConfiguration： jndi的自动配置
+
+    ● XADataSourceAutoConfiguration： 分布式事务相关的
+
+整合三方数据源 druid
+
+@Configuration
+public class MyDataSourceConfig {
+
+    // 默认的自动配置是判断容器中没有才会配@ConditionalOnMissingBean(DataSource.class)
+    @ConfigurationProperties("spring.datasource")
+    @Bean
+    public DataSource dataSource() throws SQLException {
+        DruidDataSource druidDataSource = new DruidDataSource();
+
+        druidDataSource.setUrl();
+        druidDataSource.setUsername();
+        druidDataSource.setPassword();
+        //加入监控功能 和防火墙功能（防止sql的注入攻击）
+        druidDataSource.setFilters("stat,wall");
+
+        druidDataSource.setMaxActive(10);
+        return druidDataSource;
+    }
+
+    /**
+     * 配置 druid的监控页功能 原理配置一个servlet，urlMappings设置为 /druid/*
+     * @return
+     */
+    @Bean
+    public ServletRegistrationBean statViewServlet(){
+        StatViewServlet statViewServlet = new StatViewServlet();
+        ServletRegistrationBean<StatViewServlet> registrationBean = new ServletRegistrationBean<>(statViewServlet, "/druid/*");
+
+        registrationBean.addInitParameter("loginUsername","admin");
+        registrationBean.addInitParameter("loginPassword","123456");
+
+
+        return registrationBean;
+    }
+
+    /**
+     * WebStatFilter 用于采集web-jdbc关联监控的数据。
+     */
+    @Bean
+    public FilterRegistrationBean webStatFilter(){
+        WebStatFilter webStatFilter = new WebStatFilter();
+
+        FilterRegistrationBean<WebStatFilter> filterRegistrationBean = new FilterRegistrationBean<>(webStatFilter);
+        filterRegistrationBean.setUrlPatterns(Arrays.asList("/*"));
+        filterRegistrationBean.addInitParameter("exclusions","*.js,*.gif,*.jpg,*.png,*.css,*.ico,/druid/*");
+
+        return filterRegistrationBean;
+    }
+
+}

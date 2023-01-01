@@ -1,0 +1,125 @@
+org.springframework.boot.autoconfigure.web.servlet.WebMvcAutoConfiguration
+
+    @Override
+    		@SuppressWarnings("deprecation")
+    		public void configurePathMatch(PathMatchConfigurer configurer) {
+    			configurer.setUseSuffixPatternMatch(this.mvcProperties.getPathmatch().isUseSuffixPattern());
+    			configurer.setUseRegisteredSuffixPatternMatch(
+    					this.mvcProperties.getPathmatch().isUseRegisteredSuffixPattern());
+    			this.dispatcherServletPath.ifAvailable((dispatcherPath) -> {
+    				String servletUrlMapping = dispatcherPath.getServletUrlMapping();
+    				if (servletUrlMapping.equals("/") && singleDispatcherServlet()) {
+    					UrlPathHelper urlPathHelper = new UrlPathHelper();
+    					urlPathHelper.setAlwaysUseFullPath(true);
+    					configurer.setUrlPathHelper(urlPathHelper);
+    				}
+    			});
+    		}
+    //导致矩阵变量不可以用的原因在于 UrlPathHelper 中的removeSemicolonContent属性将路径分号以后的内容进行截断
+    public class UrlPathHelper {
+
+    	/**
+    	 * Special WebSphere request attribute, indicating the original request URI.
+    	 * Preferable over the standard Servlet 2.4 forward attribute on WebSphere,
+    	 * simply because we need the very first URI in the request forwarding chain.
+    	 */
+    	private static final String WEBSPHERE_URI_ATTRIBUTE = "com.ibm.websphere.servlet.uri_non_decoded";
+
+    	private static final Log logger = LogFactory.getLog(UrlPathHelper.class);
+
+    	@Nullable
+    	static volatile Boolean websphereComplianceFlag;
+
+    	private boolean alwaysUseFullPath = false;
+
+    	private boolean urlDecode = true;
+
+    	private boolean removeSemicolonContent = true;
+
+
+开启springboot对矩阵变量功能的支持只需要想办法修改这个变量为false即可
+Springboot提供了一种定制化的方案就是  不用@EnableWebMvc注解。使用 @Configuration + WebMvcConfigurer 自定义规则
+分析 WebMvcAutoConfiguration其中的一个静态内部类
+         public static class WebMvcAutoConfigurationAdapter implements WebMvcConfigurer {}
+
+    org.springframework.web.servlet.config.annotation.WebMvcConfigurer
+    public interface WebMvcConfigurer {
+        //默认的方法实现
+        default void configurePathMatch(PathMatchConfigurer configurer) {
+        }
+
+
+所以springboot开启矩阵变量对WebMvcConfigurer中的configurePathMatch(PathMatchConfigurer configurer)方法做实现即可
+
+方式1：实现configurePathMatch(PathMatchConfigurer configurer) 方法
+@Configuration
+public class MyAppConfig implements WebMvcConfigurer {
+    /*
+     * @Author GhostGalaxy
+     * @Description 开启springboot对矩阵变量的支持方式1
+     * @Date 16:50:51 2022/12/22
+     * @Param [configurer]
+     * @return void
+     **/
+    @Override
+    public void configurePathMatch(PathMatchConfigurer configurer) {
+        UrlPathHelper urlPathHelper = new UrlPathHelper();
+        urlPathHelper.setRemoveSemicolonContent(false);
+        configurer.setUrlPathHelper(urlPathHelper);
+    }
+ }
+
+方式2：自己导入一个WebMvcConfigurer
+@Configuration
+public class MyAppConfig{
+     @Bean
+        public WebMvcConfigurer webMvcConfigurer(){
+            return new WebMvcConfigurer() {
+                @Override
+                public void configurePathMatch(PathMatchConfigurer configurer) {
+                    UrlPathHelper urlPathHelper = new UrlPathHelper();
+                    urlPathHelper.setRemoveSemicolonContent(false);
+                    configurer.setUrlPathHelper(urlPathHelper);
+                }
+            };
+        }
+}
+
+
+矩阵变量的适用案例
+  /*
+     * @Author GhostGalaxy
+     * @Description 测试请求路径为  /cars/sale;min=10;brand=BWM,BYD,BY
+     * springboot默认不开启矩阵变量功能  路径的真实值为sale
+     * @Date 16:22:21 2022/12/22
+     * @Param [min, brand]
+     * @return java.util.Map<java.lang.String,java.lang.Object>
+     **/
+    @ResponseBody
+    @GetMapping("/cars/{path}")
+    public Map<String,Object> getMatrixVariableParam(@MatrixVariable("min") Integer min, @MatrixVariable("brand") List<String> brand,
+                                                     @PathVariable("path") String path){
+           Map<String,Object> map = new HashMap<String,Object>();
+           map.put("min",min);
+           map.put("brand",brand);
+           System.out.println("路径的真实值为"+path);
+           return map;
+    }
+    /*
+     * @Author GhostGalaxy
+     * @Description //TODO 请求路径为 /boss/1;age=20/2;age=10  需要通过一个pathVar属性做区分
+     * @Date 17:06:45 2022/12/22
+     * @Param [bossId, empId, path]
+     * @return java.util.Map<java.lang.String,java.lang.Object>
+     **/
+    @ResponseBody
+    @GetMapping("/boss/{bossId}/{empId}")
+    public Map<String,Object> getMatrixVariableParam02(@MatrixVariable(value = "age",pathVar = "bossId") Integer bossAge, @MatrixVariable(value = "age",pathVar = "empId") Integer empAge,
+                                                     @PathVariable("bossId") String path){
+        Map<String,Object> map = new HashMap<String,Object>();
+        map.put("bossAge",bossAge);
+        map.put("empAge",empAge);
+        System.out.println("路径的真实值为"+path);
+        return map;
+    }
+

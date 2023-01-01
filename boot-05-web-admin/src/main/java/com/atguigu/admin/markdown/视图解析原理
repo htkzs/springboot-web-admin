@@ -1,0 +1,203 @@
+视图解析原理流程
+1、目标方法处理的过程中，所有数据都会被放在 ModelAndViewContainer 里面。包括数据和视图地址
+2、方法的参数是一个自定义类型对象（从请求参数中确定的），把他重新放在 ModelAndViewContainer
+3、任何目标方法执行完成以后都会返回 ModelAndView（数据和视图地址）。
+4、processDispatchResult  处理派发结果（页面改如何响应）
+● 1、render(mv, request, response); 进行页面渲染逻辑
+  ○ 1、根据方法的String返回值得到 View 对象【定义了页面的渲染逻辑】
+     View是一个人接口，定义了一个方法 该方法就是如何渲染的逻辑 比如以JSON格式响应 可任意通过Response对象 如何渲染完全可以自己来定义
+     render(@Nullable Map<String, ?> var1, HttpServletRequest var2, HttpServletResponse var3)
+
+    ■ 1、所有的视图解析器尝试是否能根据当前返回值得到View对象
+    ■ 2、得到了  redirect:/main.html --> Thymeleaf new RedirectView()
+    ■ 3、ContentNegotiationViewResolver 里面包含了下面所有的视图解析器，内部还是利用下面所有视图解析器得到视图对象。
+    ■ 4、view.render(mv.getModelInternal(), request, response);   视图对象调用自定义的render进行页面渲染工作
+      ● RedirectView 如何渲染【重定向到一个页面】
+      ● 1、获取目标url地址
+      ● 2、response.sendRedirect(encodedURL);
+
+视图解析：
+  ○ 返回值以 forward: 开始： new InternalResourceView(forwardUrl); -->  转发request.getRequestDispatcher(path).forward(request, response);
+  ○ 返回值以 redirect: 开始： new RedirectView() --》 render就是重定向
+  ○ 返回值是普通字符串： new ThymeleafView（）--->
+
+1.源代码调试
+     DispatcherServlet的doDispatch()方法
+     //处理派发的结果，页面如何响应
+     this.processDispatchResult(processedRequest, response, mappedHandler, mv, (Exception)dispatchException);
+
+     private void processDispatchResult(HttpServletRequest request, HttpServletResponse response, @Nullable HandlerExecutionChain mappedHandler, @Nullable ModelAndView mv, @Nullable Exception exception) throws Exception {
+             boolean errorView = false;
+             if (exception != null) {
+                 if (exception instanceof ModelAndViewDefiningException) {
+                     this.logger.debug("ModelAndViewDefiningException encountered", exception);
+                     mv = ((ModelAndViewDefiningException)exception).getModelAndView();
+                 } else {
+                     Object handler = mappedHandler != null ? mappedHandler.getHandler() : null;
+                     mv = this.processHandlerException(request, response, handler, exception);
+                     errorView = mv != null;
+                 }
+             }
+
+             if (mv != null && !mv.wasCleared()) {
+                 //页面渲染 如何响应页面
+                 this.render(mv, request, response);
+                 if (errorView) {
+                     WebUtils.clearErrorRequestAttributes(request);
+                 }
+             } else if (this.logger.isTraceEnabled()) {
+                 this.logger.trace("No view rendering, null ModelAndView returned.");
+             }
+
+             if (!WebAsyncUtils.getAsyncManager(request).isConcurrentHandlingStarted()) {
+                 if (mappedHandler != null) {
+                     mappedHandler.triggerAfterCompletion(request, response, (Exception)null);
+                 }
+
+             }
+         }
+
+         protected void render(ModelAndView mv, HttpServletRequest request, HttpServletResponse response) throws Exception {
+                 //国际化相关
+                 Locale locale = this.localeResolver != null ? this.localeResolver.resolveLocale(request) : request.getLocale();
+                 response.setLocale(locale);
+                 //获取到视图的名称  方法的返回值
+                 String viewName = mv.getViewName();
+                 View view;
+                 if (viewName != null) {
+                     //1.解析得到视图对象 viewName:视图的名称 mv.getModelInternal()：视图的model数据信息 request：请求对象
+                     view = this.resolveViewName(viewName, mv.getModelInternal(), locale, request);
+                     if (view == null) {
+                         throw new ServletException("Could not resolve view with name '" + mv.getViewName() + "' in servlet with name '" + this.getServletName() + "'");
+                     }
+                 } else {
+                     view = mv.getView();
+                     if (view == null) {
+                         throw new ServletException("ModelAndView [" + mv + "] neither contains a view name nor a View object in servlet with name '" + this.getServletName() + "'");
+                     }
+                 }
+
+                 if (this.logger.isTraceEnabled()) {
+                     this.logger.trace("Rendering view [" + view + "] ");
+                 }
+
+                 try {
+                     if (mv.getStatus() != null) {
+                         response.setStatus(mv.getStatus().value());
+                     }
+                     //通过视图对象渲染页面
+                     view.render(mv.getModelInternal(), request, response);
+                 } catch (Exception var8) {
+                     if (this.logger.isDebugEnabled()) {
+                         this.logger.debug("Error rendering view [" + view + "]", var8);
+                     }
+
+                     throw var8;
+                 }
+             }
+
+              如何根据viewname获取到视图对象
+              view = this.resolveViewName(viewName, mv.getModelInternal(), locale, request);
+
+               @Nullable
+                  protected View resolveViewName(String viewName, @Nullable Map<String, Object> model, Locale locale, HttpServletRequest request) throws Exception {
+                      if (this.viewResolvers != null) {
+                          //遍历所有的视图解析器 ，如果可以直接返回   （所有的视图解析器尝试是否能根据当前返回值得到View对象）
+                          Iterator var5 = this.viewResolvers.iterator();
+
+                          while(var5.hasNext()) {
+                              ViewResolver viewResolver = (ViewResolver)var5.next();
+                              //得到一个具体的视图解析器
+                              View view = viewResolver.resolveViewName(viewName, locale);
+                              if (view != null) {
+                                  return view;
+                              }
+                          }
+                      }
+
+                      return null;
+                  }
+
+ 视图解析器：
+    1.ContentNegotiatingViewResolver
+    2.BeanNameViewResolver
+    3.ThymeleafViewResolver
+    4.ViewResolverComposite
+    5.InternalResourceViewResolver
+
+
+    2、得到了  redirect:/main.html --> Thymeleaf new RedirectView() 这个是如何得到的呢？
+       org.springframework.web.servlet.view.ContentNegotiatingViewResolver
+       进入到上一步的 View view = viewResolver.resolveViewName(viewName, locale);方法中
+
+        @Nullable
+           public View resolveViewName(String viewName, Locale locale) throws Exception {
+               RequestAttributes attrs = RequestContextHolder.getRequestAttributes();
+               Assert.state(attrs instanceof ServletRequestAttributes, "No current ServletRequestAttributes");
+               List<MediaType> requestedMediaTypes = this.getMediaTypes(((ServletRequestAttributes)attrs).getRequest());
+               if (requestedMediaTypes != null) {
+                   //得到所有的候选的视图解析器
+                   List<View> candidateViews = this.getCandidateViews(viewName, locale, requestedMediaTypes);
+                   //得到一个最佳的视图解析器
+                   View bestView = this.getBestView(candidateViews, requestedMediaTypes, attrs);
+                   if (bestView != null) {
+                       return bestView;
+                   }
+               }
+
+               进入getCandidateViews(viewName, locale, requestedMediaTypes);
+
+                private List<View> getCandidateViews(String viewName, Locale locale, List<MediaType> requestedMediaTypes) throws Exception {
+                       List<View> candidateViews = new ArrayList();
+                       //这里还是获取到所有的视图解析器 看那个视图解析器能够解析 redirect:/main.html
+                       if (this.viewResolvers != null) {
+                           Assert.state(this.contentNegotiationManager != null, "No ContentNegotiationManager set");
+                           Iterator var5 = this.viewResolvers.iterator();
+
+                           while(var5.hasNext()) {
+                               ViewResolver viewResolver = (ViewResolver)var5.next();
+                               //判断那个视图解析器可以解析  这里共五个可选项BeanNameViewResolvers  ContentNegotiatingViewResolver ViewResolverComposite ThymeleafViewResolver InternalResourceViewResolver 各自有各自的视图解析逻辑 需要要逐一分析
+                               View view = viewResolver.resolveViewName(viewName, locale);
+                               if (view != null) {
+                                   candidateViews.add(view);
+                               }
+
+                               Iterator var8 = requestedMediaTypes.iterator();
+
+                               while(var8.hasNext()) {
+                                   MediaType requestedMediaType = (MediaType)var8.next();
+                                   List<String> extensions = this.contentNegotiationManager.resolveFileExtensions(requestedMediaType);
+                                   Iterator var11 = extensions.iterator();
+
+                                   while(var11.hasNext()) {
+                                       String extension = (String)var11.next();
+                                       String viewNameWithExtension = viewName + '.' + extension;
+                                       view = viewResolver.resolveViewName(viewNameWithExtension, locale);
+                                       if (view != null) {
+                                           candidateViews.add(view);
+                                       }
+                                   }
+                               }
+                           }
+                       }
+
+        进入到 org.springframework.web.servlet.view.AbstractCachingViewResolver.resolveViewName(String viewName, Locale locale)方法：
+        通过 该方法真正的创建RedirectView对象 this.createView(viewName, locale);（这里为什么是RedirectView，因为视图名称是redirect:main.html）
+
+        发现在ThymeleafViewResolver中直接帮我们new了一个RedirectView
+        RedirectView view = new RedirectView(forwardUrl, this.isRedirectContextRelative(), this.isRedirectHttp10Compatible());
+
+        内容协商的视图解析器ContentNegotiationViewResolver 包含了下面所有的视图解析器
+
+        得到视图对象后 调用自定义的render进行页面响应
+        view.render(mv.getModelInternal(), request, response);
+
+        RedirectView的处理逻辑
+         protected void renderMergedOutputModel(Map<String, Object> model, HttpServletRequest request, HttpServletResponse response) throws IOException {
+
+                String targetUrl = this.createTargetUrl(model, request);
+                targetUrl = this.updateTargetUrl(targetUrl, model, request, response);
+                RequestContextUtils.saveOutputFlashMap(targetUrl, request, response);
+                //重定向到一个页面
+                this.sendRedirect(request, response, targetUrl, this.http10Compatible);
+            }

@@ -1,0 +1,139 @@
+springboot中注入web原生的三大组件 Servlet、Filter、Listener
+1、使用Servlet API
+   @ServletComponentScan(basePackages = "com.atguigu.admin") :指定原生Servlet组件都放在那里
+   @WebServlet(urlPatterns = "/my")：效果：直接响应，没有经过Spring的拦截器？
+   @WebFilter(urlPatterns={"/css/*","/images/*"})
+   @WebListener
+
+   具体代码说明:
+   1.在主启动类上增加对web三大组件的扫描注解@ServletComponentScan
+   2.编写web组件逻辑，并注入到IOC容器中
+
+   @WebServlet(urlPatterns = "/my")
+   public class MyServlet extends HttpServlet {
+
+       @Override
+       protected void doGet(HttpServletRequest req, HttpServletResponse resp) throws ServletException, IOException {
+           resp.getWriter().write("66666");
+       }
+   }
+
+   @Slf4j
+   @WebFilter(urlPatterns={"/css/*","/images/*"}) //my
+   public class MyFilter implements Filter {
+       @Override
+       public void init(FilterConfig filterConfig) throws ServletException {
+           log.info("MyFilter初始化完成");
+       }
+
+       @Override
+       public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) throws IOException, ServletException {
+           log.info("MyFilter工作");
+           chain.doFilter(request,response);
+       }
+
+       @Override
+       public void destroy() {
+           log.info("MyFilter销毁");
+       }
+   }
+
+
+   @Slf4j
+   @WebListener
+   public class MyServletContextListener implements ServletContextListener {
+       @Override
+       public void contextInitialized(ServletContextEvent sce) {
+           log.info("MyServletContextListener监听到项目初始化完成");
+       }
+       @Override
+       public void contextDestroyed(ServletContextEvent sce) {
+           log.info("MyServletContextListener监听到项目销毁");
+       }
+   }
+
+
+
+2、使用RegistrationBean注入web三大组件
+
+   @Configuration(proxyBeanMethods = true)
+   public class MyRegisterConfig {
+       @Bean
+       public ServletRegistrationBean myServlet(){
+           MyServlet myServlet = new MyServlet();
+
+           return new ServletRegistrationBean(myServlet,"/my","/my02");
+       }
+       @Bean
+       public FilterRegistrationBean myFilter(){
+           MyFilter myFilter = new MyFilter();
+          //return new FilterRegistrationBean(myFilter,myServlet());
+           FilterRegistrationBean filterRegistrationBean = new FilterRegistrationBean(myFilter);
+           filterRegistrationBean.setUrlPatterns(Arrays.asList("/my","/css/*"));
+           return filterRegistrationBean;
+       }
+       @Bean
+       public ServletListenerRegistrationBean myListener(){
+           MyServletContextListener myServletContextListener = new MyServletContextListener();
+           return new ServletListenerRegistrationBean(myServletContextListener);
+       }
+   }
+
+
+DispatchServlet的自动配置原理:
+● 容器中自动配置了DispatcherServlet属性绑定到WebMvcProperties；对应的配置文件配置项是 spring.mvc。
+● 通过 ServletRegistrationBean<DispatcherServlet> 把 DispatcherServlet  配置进来。
+● 默认映射的是 / 路径。
+
+
+    @Configuration(proxyBeanMethods = false)
+    @Conditional({DispatcherServletAutoConfiguration.DispatcherServletRegistrationCondition.class})
+    @ConditionalOnClass({ServletRegistration.class})
+    @EnableConfigurationProperties({WebMvcProperties.class})
+    @Import({DispatcherServletAutoConfiguration.DispatcherServletConfiguration.class})
+    protected static class DispatcherServletRegistrationConfiguration {
+        protected DispatcherServletRegistrationConfiguration() { }
+        @Bean( name = {"dispatcherServletRegistration"})
+        @ConditionalOnBean(
+            value = {DispatcherServlet.class},
+            name = {"dispatcherServlet"}
+        )
+        // 通过ServletRegistrationBean<DispatcherServlet> 把 DispatcherServlet  配置进来
+        public DispatcherServletRegistrationBean dispatcherServletRegistration(DispatcherServlet dispatcherServlet, WebMvcProperties webMvcProperties, ObjectProvider<MultipartConfigElement> multipartConfig) {
+            DispatcherServletRegistrationBean registration = new DispatcherServletRegistrationBean(dispatcherServlet, webMvcProperties.getServlet().getPath());
+            registration.setName("dispatcherServlet");
+            registration.setLoadOnStartup(webMvcProperties.getServlet().getLoadOnStartup());
+            multipartConfig.ifAvailable(registration::setMultipartConfig);
+            return registration;
+        }
+    }
+    @Configuration(
+        proxyBeanMethods = false
+    )
+    @Conditional({DispatcherServletAutoConfiguration.DefaultDispatcherServletCondition.class})
+    @ConditionalOnClass({ServletRegistration.class})
+    @EnableConfigurationProperties({WebMvcProperties.class})
+    protected static class DispatcherServletConfiguration {
+        protected DispatcherServletConfiguration() {}
+        //向容器中放入一个dispatcherServlet
+        @Bean(name = {"dispatcherServlet"})
+        // 方法的参数从容器中获取
+        public DispatcherServlet dispatcherServlet(WebMvcProperties webMvcProperties) {
+            DispatcherServlet dispatcherServlet = new DispatcherServlet();
+            dispatcherServlet.setDispatchOptionsRequest(webMvcProperties.isDispatchOptionsRequest());
+            dispatcherServlet.setDispatchTraceRequest(webMvcProperties.isDispatchTraceRequest());
+            dispatcherServlet.setThrowExceptionIfNoHandlerFound(webMvcProperties.isThrowExceptionIfNoHandlerFound());
+            dispatcherServlet.setPublishEvents(webMvcProperties.isPublishRequestHandledEvents());
+            dispatcherServlet.setEnableLoggingRequestDetails(webMvcProperties.isLogRequestDetails());
+            return dispatcherServlet;
+        }
+        // 文件上传解析器
+        @Bean
+        @ConditionalOnBean({MultipartResolver.class})
+        @ConditionalOnMissingBean(
+            name = {"multipartResolver"}
+        )
+        public MultipartResolver multipartResolver(MultipartResolver resolver) {
+            return resolver;
+        }
+    }

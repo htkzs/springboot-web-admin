@@ -1,0 +1,293 @@
+  ○ SpringBoot应用启动发现当前是Web应用。web场景包-导入tomcat
+  ○ web应用会创建一个web版的ioc容器 ServletWebServerApplicationContext
+
+    源码解读:
+    public class ServletWebServerApplicationContext extends GenericWebApplicationContext implements ConfigurableWebServerApplicationContext {
+        private static final Log logger = LogFactory.getLog(ServletWebServerApplicationContext.class);
+        public static final String DISPATCHER_SERVLET_NAME = "dispatcherServlet";
+        private volatile WebServer webServer;
+        private ServletConfig servletConfig;
+        private String serverNamespace;
+
+        public ServletWebServerApplicationContext() {
+        }
+
+        public ServletWebServerApplicationContext(DefaultListableBeanFactory beanFactory) {
+            super(beanFactory);
+        }
+
+        protected void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
+            beanFactory.addBeanPostProcessor(new WebApplicationContextServletContextAwareProcessor(this));
+            beanFactory.ignoreDependencyInterface(ServletContextAware.class);
+            this.registerWebApplicationScopes();
+        }
+
+        public final void refresh() throws BeansException, IllegalStateException {
+            try {
+                super.refresh();
+            } catch (RuntimeException var3) {
+                WebServer webServer = this.webServer;
+                if (webServer != null) {
+                    webServer.stop();
+                }
+
+                throw var3;
+            }
+        }
+
+        protected void onRefresh() {
+            super.onRefresh();
+
+            try {
+                this.createWebServer();
+            } catch (Throwable var2) {
+                throw new ApplicationContextException("Unable to start web server", var2);
+            }
+        }
+
+        protected void doClose() {
+            if (this.isActive()) {
+                AvailabilityChangeEvent.publish(this, ReadinessState.REFUSING_TRAFFIC);
+            }
+
+            super.doClose();
+        }
+
+        private void createWebServer() {
+            WebServer webServer = this.webServer;
+            ServletContext servletContext = this.getServletContext();
+            if (webServer == null && servletContext == null) {
+                // ServletWebServerApplicationContext  启动的时候寻找 ServletWebServerFactory（Servlet 的web服务器工厂---> Servlet 的web服务器）
+                ServletWebServerFactory factory = this.getWebServerFactory();
+                this.webServer = factory.getWebServer(new ServletContextInitializer[]{this.getSelfInitializer()});
+                this.getBeanFactory().registerSingleton("webServerGracefulShutdown", new WebServerGracefulShutdownLifecycle(this.webServer));
+                this.getBeanFactory().registerSingleton("webServerStartStop", new WebServerStartStopLifecycle(this, this.webServer));
+            } else if (servletContext != null) {
+                try {
+                    this.getSelfInitializer().onStartup(servletContext);
+                } catch (ServletException var4) {
+                    throw new ApplicationContextException("Cannot initialize servlet context", var4);
+                }
+            }
+
+            this.initPropertySources();
+        }
+
+        protected ServletWebServerFactory getWebServerFactory() {
+            String[] beanNames = this.getBeanFactory().getBeanNamesForType(ServletWebServerFactory.class);
+            if (beanNames.length == 0) {
+                throw new ApplicationContextException("Unable to start ServletWebServerApplicationContext due to missing ServletWebServerFactory bean.");
+            } else if (beanNames.length > 1) {
+                throw new ApplicationContextException("Unable to start ServletWebServerApplicationContext due to multiple ServletWebServerFactory beans : " + StringUtils.arrayToCommaDelimitedString(beanNames));
+            } else {
+                return (ServletWebServerFactory)this.getBeanFactory().getBean(beanNames[0], ServletWebServerFactory.class);
+            }
+        }
+
+  ○ ServletWebServerApplicationContext  启动的时候寻找 ServletWebServerFactory（Servlet 的web服务器工厂---> Servlet 的web服务器）
+  ○ SpringBoot底层默认有很多的WebServer工厂；TomcatServletWebServerFactory, JettyServletWebServerFactory, or UndertowServletWebServerFactory
+  ○ 底层直接会有一个自动配置类。ServletWebServerFactoryAutoConfiguration
+
+    @Configuration(
+        proxyBeanMethods = false
+    )
+    @AutoConfigureOrder(-2147483648)
+    @ConditionalOnClass({ServletRequest.class})
+    @ConditionalOnWebApplication(
+        type = Type.SERVLET
+    )
+    @EnableConfigurationProperties({ServerProperties.class})
+    @Import({ServletWebServerFactoryAutoConfiguration.BeanPostProcessorsRegistrar.class, EmbeddedTomcat.class, EmbeddedJetty.class, EmbeddedUndertow.class})
+    public class ServletWebServerFactoryAutoConfiguration {}
+
+    org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryConfiguration
+    @Configuration(
+        proxyBeanMethods = false
+    )
+    class ServletWebServerFactoryConfiguration {
+        ServletWebServerFactoryConfiguration() {
+        }
+
+        @Configuration(
+            proxyBeanMethods = false
+        )
+        //满足所有条件时该类才有效
+        @ConditionalOnClass({Servlet.class, Undertow.class, SslClientAuthMode.class})
+        // 如果没有ServletWebServerFactory的bean时，会自动创建一个UndertowServletWebServerFactory并放入到容器中
+        @ConditionalOnMissingBean(
+            value = {ServletWebServerFactory.class},
+            search = SearchStrategy.CURRENT
+        )
+        // Undertow
+        static class EmbeddedUndertow {
+            EmbeddedUndertow() {
+            }
+
+            @Bean
+            UndertowServletWebServerFactory undertowServletWebServerFactory(ObjectProvider<UndertowDeploymentInfoCustomizer> deploymentInfoCustomizers, ObjectProvider<UndertowBuilderCustomizer> builderCustomizers) {
+                UndertowServletWebServerFactory factory = new UndertowServletWebServerFactory();
+                factory.getDeploymentInfoCustomizers().addAll((Collection)deploymentInfoCustomizers.orderedStream().collect(Collectors.toList()));
+                factory.getBuilderCustomizers().addAll((Collection)builderCustomizers.orderedStream().collect(Collectors.toList()));
+                return factory;
+            }
+        }
+        // Jetty
+        @Configuration(
+            proxyBeanMethods = false
+        )
+        @ConditionalOnClass({Servlet.class, Server.class, Loader.class, WebAppContext.class})
+        @ConditionalOnMissingBean(
+            value = {ServletWebServerFactory.class},
+            search = SearchStrategy.CURRENT
+        )
+        static class EmbeddedJetty {
+            EmbeddedJetty() {
+            }
+
+            @Bean
+            JettyServletWebServerFactory JettyServletWebServerFactory(ObjectProvider<JettyServerCustomizer> serverCustomizers) {
+                JettyServletWebServerFactory factory = new JettyServletWebServerFactory();
+                factory.getServerCustomizers().addAll((Collection)serverCustomizers.orderedStream().collect(Collectors.toList()));
+                return factory;
+            }
+        }
+        // tomcat
+        @Configuration(
+            proxyBeanMethods = false
+        )
+        @ConditionalOnClass({Servlet.class, Tomcat.class, UpgradeProtocol.class})
+        @ConditionalOnMissingBean(
+            value = {ServletWebServerFactory.class},
+            search = SearchStrategy.CURRENT
+        )
+        static class EmbeddedTomcat {
+            EmbeddedTomcat() {
+            }
+
+            @Bean
+            TomcatServletWebServerFactory tomcatServletWebServerFactory(ObjectProvider<TomcatConnectorCustomizer> connectorCustomizers, ObjectProvider<TomcatContextCustomizer> contextCustomizers, ObjectProvider<TomcatProtocolHandlerCustomizer<?>> protocolHandlerCustomizers) {
+                TomcatServletWebServerFactory factory = new TomcatServletWebServerFactory();
+                factory.getTomcatConnectorCustomizers().addAll((Collection)connectorCustomizers.orderedStream().collect(Collectors.toList()));
+                factory.getTomcatContextCustomizers().addAll((Collection)contextCustomizers.orderedStream().collect(Collectors.toList()));
+                factory.getTomcatProtocolHandlerCustomizers().addAll((Collection)protocolHandlerCustomizers.orderedStream().collect(Collectors.toList()));
+                return factory;
+            }
+        }
+    }
+
+  ○ ServletWebServerFactoryAutoConfiguration导入了ServletWebServerFactoryConfiguration（配置类）
+  ○ ServletWebServerFactoryConfiguration 配置类 根据动态判断系统中到底导入了那个Web服务器的包。（默认是web-starter导入tomcat包），容器中就有 TomcatServletWebServerFactory
+  ○ TomcatServletWebServerFactory 创建出Tomcat服务器并启动；TomcatWebServer 的构造器拥有初始化方法initialize---this.tomcat.start();
+  ○ 内嵌服务器，就是手动把启动服务器的代码调用（tomcat核心jar包存在）
+     org.springframework.boot.web.embedded.tomcat.TomcatServletWebServerFactory
+     public WebServer getWebServer(ServletContextInitializer... initializers) {
+            if (this.disableMBeanRegistry) {
+                Registry.disableRegistry();
+            }
+            //创建tomcat服务器
+            Tomcat tomcat = new Tomcat();
+            File baseDir = this.baseDirectory != null ? this.baseDirectory : this.createTempDir("tomcat");
+            tomcat.setBaseDir(baseDir.getAbsolutePath());
+            //设置访问的协议
+            Connector connector = new Connector(this.protocol);
+            //失败时抛出异常
+            connector.setThrowOnFailure(true);
+            tomcat.getService().addConnector(connector);
+            this.customizeConnector(connector);
+            tomcat.setConnector(connector);
+            tomcat.getHost().setAutoDeploy(false);
+            this.configureEngine(tomcat.getEngine());
+            Iterator var5 = this.additionalTomcatConnectors.iterator();
+
+            while(var5.hasNext()) {
+                Connector additionalConnector = (Connector)var5.next();
+                tomcat.getService().addConnector(additionalConnector);
+            }
+
+            this.prepareContext(tomcat.getHost(), initializers);
+            //tomcat创建好返回
+            return this.getTomcatWebServer(tomcat);
+        }
+
+        org.springframework.boot.autoconfigure.web.servlet.ServletWebServerFactoryConfiguration下:
+        进入 getTomcatWebServer(tomcat)方法
+        protected TomcatWebServer getTomcatWebServer(Tomcat tomcat) {
+                return new TomcatWebServer(tomcat, this.getPort() >= 0, this.getShutdown());
+            }
+        public TomcatWebServer(Tomcat tomcat, boolean autoStart, Shutdown shutdown) {
+                this.monitor = new Object();
+                this.serviceConnectors = new HashMap();
+                Assert.notNull(tomcat, "Tomcat Server must not be null");
+                this.tomcat = tomcat;
+                this.autoStart = autoStart;
+                this.gracefulShutdown = shutdown == Shutdown.GRACEFUL ? new GracefulShutdown(tomcat) : null;
+                this.initialize();
+            }
+        进入initialize()
+        private void initialize() throws WebServerException {
+                logger.info("Tomcat initialized with port(s): " + this.getPortsDescription(false));
+                synchronized(this.monitor) {
+                    try {
+                        this.addInstanceIdToEngineName();
+                        Context context = this.findContext();
+                        context.addLifecycleListener((event) -> {
+                            if (context.equals(event.getSource()) && "start".equals(event.getType())) {
+                                this.removeServiceConnectors();
+                            }
+
+                        });
+                        //重点，在这里启动了tomcat
+                        this.tomcat.start();
+                        this.rethrowDeferredStartupExceptions();
+
+                        try {
+                            ContextBindings.bindClassLoader(context, context.getNamingToken(), this.getClass().getClassLoader());
+                        } catch (NamingException var5) {
+                        }
+
+                        this.startDaemonAwaitThread();
+                    } catch (Exception var6) {
+                        this.stopSilently();
+                        this.destroySilently();
+                        throw new WebServerException("Unable to start embedded Tomcat", var6);
+                    }
+
+                }
+            }
+
+切换servlet容器启动：
+1.排除tomcat依赖 加入其它的servlet服务器。
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+    <exclusions>
+        <exclusion>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-tomcat</artifactId>
+        </exclusion>
+    </exclusions>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-undertow</artifactId>
+</dependency>
+
+定制servlet原理:
+● 实现  WebServerFactoryCustomizer<ConfigurableServletWebServerFactory>
+  ○ 把配置文件的值和ServletWebServerFactory 进行绑定
+● 修改配置文件 server.xxx
+● 直接自定义 ConfigurableServletWebServerFactory
+
+    import org.springframework.boot.web.server.WebServerFactoryCustomizer;
+    import org.springframework.boot.web.servlet.server.ConfigurableServletWebServerFactory;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class CustomizationBean implements WebServerFactoryCustomizer<ConfigurableServletWebServerFactory> {
+
+        @Override
+        public void customize(ConfigurableServletWebServerFactory server) {
+            server.setPort(9000);
+        }
+
+    }
